@@ -26,7 +26,7 @@ public class TeamPerformanceController {
     }
 
     @PostMapping("/start")
-    public String start(@RequestParam("score") long scoreRank) throws Exception {
+    public String start(@RequestParam("scoreRank") long scoreRank) throws Exception {
         String uuid = UUID.randomUUID().toString();
         launchJobAsynchronously(scoreRank, uuid);
         return "Job with id " + uuid + " was submitted";

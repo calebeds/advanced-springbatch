@@ -19,6 +19,8 @@ import org.springframework.batch.core.job.builder.FlowBuilder;
 import org.springframework.batch.core.job.builder.JobBuilder;
 import org.springframework.batch.core.job.flow.Flow;
 import org.springframework.batch.core.job.flow.support.SimpleFlow;
+import org.springframework.batch.core.launch.JobLauncher;
+import org.springframework.batch.core.launch.support.TaskExecutorJobLauncher;
 import org.springframework.batch.core.listener.ExecutionContextPromotionListener;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.step.builder.StepBuilder;
@@ -43,6 +45,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.WritableResource;
+import org.springframework.core.task.SimpleAsyncTaskExecutor;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
@@ -197,8 +200,9 @@ public class TeamPerformanceJobConfiguration {
     }
 
     @Bean
+    @StepScope
     @Qualifier("jobStartLoggerListener")
-    public StepExecutionListener jobStartExecutionListener(@Value("#{jobParameters['uuid']}") String uuid) {
+    public StepExecutionListener jobStartLoggerListener(@Value("#{jobParameters['uuid']}") String uuid) {
         return new StepExecutionListener() {
             @Override
             public void beforeStep(StepExecution stepExecution) {
@@ -217,6 +221,7 @@ public class TeamPerformanceJobConfiguration {
                 .reader(averageScoredTeamReader())
                 .processor(maxRatioPerformanceProcessor)
                 .writer(new FlatFileItemWriterBuilder<TeamPerformance>()
+                        .name("teamMaxRatioPerformanceWriter")
                         .resource(maxPerformanceRatioOutResource)
                         .delimited()
                         .delimiter(",")
@@ -236,7 +241,8 @@ public class TeamPerformanceJobConfiguration {
                 .reader(averageScoredTeamReader())
                 .processor(minRatioPerformanceProcessor)
                 .writer(new FlatFileItemWriterBuilder<TeamPerformance>()
-                        .resource(maxPerformanceRatioOutResource)
+                        .name("teamMinRatioPerformanceWriter")
+                        .resource(minPerformanceRatioOutResource)
                         .delimited()
                         .delimiter(",")
                         .fieldExtractor(team -> new Object[] {team.getName(), team.getPerformance()})
@@ -295,11 +301,21 @@ public class TeamPerformanceJobConfiguration {
     private static void writeHeader(Writer writer, String name, double score) {
         try {
             writer.write("***********************************************\n");
-            writer.write("Team performance below are calculated against" + score + " which was scored by  " +  name + "\n");
+            writer.write("Team performance below are calculated against " + score + " which was scored by " +  name + "\n");
             writer.write("***********************************************\n");
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    }
+
+    @Bean
+    @Qualifier("shellScriptStep")
+    public Step shellScriptStep(PlatformTransactionManager transactionManager,
+                                JobRepository jobRepository,
+                                @Qualifier("shellScriptTasklet") Tasklet shellScriptTasklet) {
+        return new StepBuilder("shellScriptStep", jobRepository)
+                .tasklet(shellScriptTasklet, transactionManager)
+                .build();
     }
 
     @Bean
@@ -308,7 +324,7 @@ public class TeamPerformanceJobConfiguration {
     public Tasklet shellScriptTasklet(@Value("#{jobParameters['uuid']}") String uuid) {
         return ((contribution, chunkContext) -> {
             CommandRunner commandRunner = new JvmCommandRunner();
-            commandRunner.exec(new String[] {"bash", "-l", "-c", "touch" + uuid + ".resulted"},
+            commandRunner.exec(new String[] {"bash", "-l", "-c", "touch " + uuid + ".resulted"},
                     new String[] {}, calculatedDirectoryResource.getFile());
             return RepeatStatus.FINISHED;
         });
@@ -332,6 +348,14 @@ public class TeamPerformanceJobConfiguration {
             LOGGER.info("Job with uuid = " + uuid + " is finished");
             return RepeatStatus.FINISHED;
         });
+    }
+
+    @Bean
+    public JobLauncher asyncJobLauncher(JobRepository jobRepository) {
+        TaskExecutorJobLauncher jobLauncher = new TaskExecutorJobLauncher();
+        jobLauncher.setJobRepository(jobRepository);
+        jobLauncher.setTaskExecutor(new SimpleAsyncTaskExecutor());
+        return jobLauncher;
     }
 
     @Bean
